@@ -243,12 +243,10 @@ def get_conversation_memory() -> ConversationMemory:
 
 def reset_services() -> None:
     """重置所有服务实例（用于测试或应用关闭）"""
-    global (
-        _vector_store, _metadata_store, _cache_store, _file_store,
-        _embedding_service, _pipeline, _query_rewriter, _retriever,
-        _reranker, _context_builder, _generator, _rag_engine,
-        _conversation_memory,
-    )
+    global _vector_store, _metadata_store, _cache_store, _file_store
+    global _embedding_service, _pipeline, _query_rewriter, _retriever
+    global _reranker, _context_builder, _generator, _rag_engine
+    global _conversation_memory
     _vector_store = None
     _metadata_store = None
     _cache_store = None
