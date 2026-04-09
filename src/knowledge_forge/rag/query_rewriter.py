@@ -5,6 +5,8 @@
 2. HyDE：生成假设性答案，用答案去检索
 3. Query 分解：将复杂问题拆解为子问题
 4. 指代消解：结合对话历史替换代词
+
+所有 LLM 调用都有降级处理：API 不可用时返回原始查询
 """
 
 import logging
@@ -18,13 +20,17 @@ logger = logging.getLogger(__name__)
 
 class RewriteStrategy(str, Enum):
     """改写策略"""
+    NONE = "none"            # 不改写
     LLM_REWRITE = "llm_rewrite"
     HYDE = "hyde"
     DECOMPOSE = "decompose"
 
 
 class QueryRewriter:
-    """Query 改写器"""
+    """Query 改写器
+
+    支持可选改写 — 如果未配置 API Key 或 client，所有方法安全降级返回原始查询
+    """
 
     def __init__(
         self,
@@ -32,8 +38,23 @@ class QueryRewriter:
         base_url: Optional[str] = None,
         model: str = "gpt-4o-mini",
     ):
-        self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
         self.model = model
+        self._client: Optional[openai.AsyncOpenAI] = None
+
+        # 只在有效 API Key 时创建客户端
+        if api_key and api_key != "sk-xxx":
+            try:
+                self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+                logger.info("QueryRewriter 初始化完成: model=%s", model)
+            except Exception as e:
+                logger.warning("QueryRewriter 客户端创建失败: %s", str(e))
+        else:
+            logger.info("QueryRewriter: 未配置有效 API Key，改写功能禁用")
+
+    @property
+    def is_available(self) -> bool:
+        """LLM 客户端是否可用"""
+        return self._client is not None
 
     async def rewrite(
         self,
@@ -49,25 +70,34 @@ class QueryRewriter:
             conversation_history: 对话历史（用于指代消解）
 
         Returns:
-            改写后的查询列表（包含原始查询）
+            改写后的查询列表（第一个为指代消解后的查询，其余为改写变体）
         """
-        # 先做指代消解
-        resolved_query = await self._resolve_references(query, conversation_history)
+        # 无 LLM 时直接返回原始查询
+        if not self.is_available or strategy == RewriteStrategy.NONE:
+            return [query]
 
-        # 再做策略改写
-        if strategy == RewriteStrategy.LLM_REWRITE:
-            rewritten = await self._llm_rewrite(resolved_query)
-        elif strategy == RewriteStrategy.HYDE:
-            rewritten = await self._hyde(resolved_query)
-        elif strategy == RewriteStrategy.DECOMPOSE:
-            rewritten = await self._decompose(resolved_query)
-        else:
-            rewritten = [resolved_query]
+        try:
+            # 先做指代消解
+            resolved_query = await self._resolve_references(query, conversation_history)
 
-        # 始终包含原始查询
-        result = [resolved_query] + [q for q in rewritten if q != resolved_query]
-        logger.info("Query 改写: '%s' → %s (strategy=%s)", query, result, strategy)
-        return result
+            # 再做策略改写
+            if strategy == RewriteStrategy.LLM_REWRITE:
+                rewritten = await self._llm_rewrite(resolved_query)
+            elif strategy == RewriteStrategy.HYDE:
+                rewritten = await self._hyde(resolved_query)
+            elif strategy == RewriteStrategy.DECOMPOSE:
+                rewritten = await self._decompose(resolved_query)
+            else:
+                rewritten = []
+
+            # 始终包含原始查询（指代消解后的版本）
+            result = [resolved_query] + [q for q in rewritten if q != resolved_query]
+            logger.info("Query 改写: '%s' → %s (strategy=%s)", query, result, strategy)
+            return result
+
+        except Exception as e:
+            logger.warning("Query 改写失败，返回原始查询: %s", str(e))
+            return [query]
 
     async def _resolve_references(
         self,
@@ -81,6 +111,9 @@ class QueryRewriter:
         # 简单启发式：检查是否包含代词
         pronouns = ["它", "他", "她", "这个", "那个", "这些", "那些", "其", "这", "那"]
         if not any(p in query for p in pronouns):
+            return query
+
+        if not self.is_available:
             return query
 
         # 构建上下文
@@ -98,14 +131,18 @@ class QueryRewriter:
 
 替换后的查询："""
 
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=200,
-        )
-        resolved = response.choices[0].message.content.strip()
-        return resolved if resolved else query
+        try:
+            response = await self._client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=200,
+            )
+            resolved = response.choices[0].message.content.strip()
+            return resolved if resolved else query
+        except Exception as e:
+            logger.warning("指代消解失败: %s", str(e))
+            return query
 
     async def _llm_rewrite(self, query: str) -> list[str]:
         """LLM 改写 - 生成多个语义等价的查询"""
@@ -116,15 +153,19 @@ class QueryRewriter:
 
 改写结果："""
 
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=300,
-        )
-        text = response.choices[0].message.content.strip()
-        rewrites = [line.strip() for line in text.split("\n") if line.strip()]
-        return rewrites
+        try:
+            response = await self._client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=300,
+            )
+            text = response.choices[0].message.content.strip()
+            rewrites = [line.strip() for line in text.split("\n") if line.strip()]
+            return rewrites
+        except Exception as e:
+            logger.warning("LLM 改写失败: %s", str(e))
+            return []
 
     async def _hyde(self, query: str) -> list[str]:
         """HyDE - 生成假设性答案用于检索"""
@@ -135,14 +176,18 @@ class QueryRewriter:
 
 回答："""
 
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=500,
-        )
-        hyde_answer = response.choices[0].message.content.strip()
-        return [hyde_answer] if hyde_answer else []
+        try:
+            response = await self._client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=500,
+            )
+            hyde_answer = response.choices[0].message.content.strip()
+            return [hyde_answer] if hyde_answer else []
+        except Exception as e:
+            logger.warning("HyDE 生成失败: %s", str(e))
+            return []
 
     async def _decompose(self, query: str) -> list[str]:
         """Query 分解 - 将复杂问题拆解为子问题"""
@@ -153,12 +198,16 @@ class QueryRewriter:
 
 子问题："""
 
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=300,
-        )
-        text = response.choices[0].message.content.strip()
-        sub_queries = [line.strip() for line in text.split("\n") if line.strip()]
-        return sub_queries
+        try:
+            response = await self._client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=300,
+            )
+            text = response.choices[0].message.content.strip()
+            sub_queries = [line.strip() for line in text.split("\n") if line.strip()]
+            return sub_queries
+        except Exception as e:
+            logger.warning("Query 分解失败: %s", str(e))
+            return []

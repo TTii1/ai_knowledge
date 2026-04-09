@@ -1,5 +1,12 @@
-"""混合检索器 - 融合向量检索和 BM25 检索结果"""
+"""混合检索器 - 融合向量检索和 BM25 检索结果
 
+融合策略：Reciprocal Rank Fusion (RRF)
+- 对每路检索结果按排名计算 RRF 分数
+- 合并去重后按融合分数排序
+- 支持异步并行多路检索
+"""
+
+import asyncio
 import logging
 from typing import Optional
 
@@ -14,8 +21,9 @@ class HybridRetriever(BaseRetriever):
     """混合检索器
 
     融合策略：Reciprocal Rank Fusion (RRF)
-    - 对每路检索结果按排名计算 RRF 分数
-    - 合并去重后按融合分数排序
+    - 向量检索捕捉语义相似性
+    - BM25 检索捕捉关键词精确匹配
+    - RRF 融合两路结果，互补优势
     """
 
     def __init__(
@@ -40,11 +48,23 @@ class HybridRetriever(BaseRetriever):
     ) -> list[RetrievedDocument]:
         """混合检索：向量 + BM25，使用 RRF 融合"""
         # 1. 并行多路检索
-        vector_results = await self.vector_retriever.retrieve(query, top_k=top_k, knowledge_base=knowledge_base)
-
-        bm25_results = []
+        tasks = [
+            self.vector_retriever.retrieve(query, top_k=top_k, knowledge_base=knowledge_base),
+        ]
         if self.bm25_retriever:
-            bm25_results = await self.bm25_retriever.retrieve(query, top_k=top_k, knowledge_base=knowledge_base)
+            tasks.append(
+                self.bm25_retriever.retrieve(query, top_k=top_k, knowledge_base=knowledge_base)
+            )
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        vector_results = results[0] if not isinstance(results[0], Exception) else []
+        bm25_results = results[1] if len(results) > 1 and not isinstance(results[1], Exception) else []
+
+        if isinstance(results[0], Exception):
+            logger.warning("向量检索异常: %s", str(results[0]))
+        if len(results) > 1 and isinstance(results[1], Exception):
+            logger.warning("BM25 检索异常: %s", str(results[1]))
 
         # 2. RRF 融合
         fused = self._rrf_fusion(vector_results, bm25_results)

@@ -27,7 +27,16 @@
   - 82 个文件, 10043 行代码
   - 11 个单元测试全部通过
   - Git 提交: c09a29a
-- [ ] Phase 1: 文档处理管道
+- [x] Phase 1: 文档处理管道 (2026-04-09)
+  - Markdown 解析器修复（代码块内 # 不误判）
+  - Word 解析器修复（中英文标题兼容）
+  - Chunk overlap 修复（不污染 content）
+  - MetadataStore 完整实现（SQLAlchemy ORM + CRUD）
+  - 文档 API + 知识库 API 完善
+  - Pipeline 串联 embedding + vector_store
+  - Celery 任务完善（重试+错误处理）
+  - 32 个单元测试全部通过
+  - Git 提交: 2981592
 - [ ] Phase 2: RAG 问答核心
 - [ ] Phase 3: MCP Server 开发
 - [ ] Phase 4: 管理后台 + 评估
@@ -39,3 +48,9 @@
 - tests/ - 测试 (unit/integration/evaluation)
 - scripts/ - 脚本工具
 - data/ - 数据目录 (uploads/evaluation/test_docs)
+
+## 开发注意
+- git push 由用户手动操作
+- Python 3.13 中 Optional 需要显式导入（不自动从 typing 导入）
+- SQLite 不支持 pool_size/max_overflow 参数
+- datetime.utcnow() 已弃用，使用 datetime.now(timezone.utc)
