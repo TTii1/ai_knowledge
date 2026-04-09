@@ -17,7 +17,7 @@ from knowledge_forge.document.parsers import ParsedDocument
 logger = logging.getLogger(__name__)
 
 # 分句正则：匹配中英文句末标点
-SENTENCE_PATTERN = re.compile(r"(?<=[。！？.!?\n])\s*")
+SENTENCE_PATTERN = re.compile(r"(?<=[。！？.!?])\s*")
 
 
 @dataclass
@@ -43,25 +43,10 @@ class SemanticChunker(BaseChunker):
         paragraphs = self._split_by_paragraph(content)
 
         # 第二步：合并小段落 + 拆分大段落
-        chunks = self._merge_and_split(paragraphs)
+        chunk_texts = self._merge_and_split(paragraphs)
 
-        # 第三步：添加 overlap
-        chunks = self._add_overlap(chunks)
-
-        # 构建 Chunk 对象
-        result = []
-        for i, chunk_content in enumerate(chunks):
-            token_count = self._estimate_token_count(chunk_content)
-            chunk = Chunk(
-                content=chunk_content,
-                metadata=ChunkMetadata(
-                    chunk_index=i,
-                    total_chunks=len(chunks),
-                    **(metadata or {}),
-                ),
-                token_count=token_count,
-            )
-            result.append(chunk)
+        # 第三步：构建 Chunk 对象（含 overlap 信息）
+        result = self._build_chunks_with_overlap(chunk_texts, metadata)
 
         logger.info("切分完成: 输入 %d 字符 → %d chunks", len(content), len(result))
         return result
@@ -189,31 +174,42 @@ class SemanticChunker(BaseChunker):
 
         return result
 
-    def _add_overlap(self, chunks: list[str]) -> list[str]:
-        """为 chunks 添加前后 overlap"""
-        if len(chunks) <= 1 or self.config.chunk_overlap <= 0:
-            return chunks
+    def _build_chunks_with_overlap(
+        self, chunk_texts: list[str], metadata: dict | None = None
+    ) -> list[Chunk]:
+        """构建 Chunk 对象，将 overlap 正确存入 context_before/context_after
+
+        关键改变：overlap 不再拼入 content，而是存入专门的 context 字段，
+        这样 chunk.content 保持纯净，不影响向量化和检索质量。
+        """
+        if not chunk_texts:
+            return []
 
         result = []
-        for i, chunk in enumerate(chunks):
-            # 前置 overlap：取前一个 chunk 的末尾
-            overlap_before = ""
-            if i > 0:
-                overlap_before = self._get_overlap_text(chunks[i - 1], from_end=True)
+        for i, chunk_content in enumerate(chunk_texts):
+            # 计算前置 overlap
+            context_before = ""
+            if i > 0 and self.config.chunk_overlap > 0:
+                context_before = self._get_overlap_text(chunk_texts[i - 1], from_end=True)
 
-            # 后置 overlap：取后一个 chunk 的开头
-            overlap_after = ""
-            if i < len(chunks) - 1:
-                overlap_after = self._get_overlap_text(chunks[i + 1], from_end=False)
+            # 计算后置 overlap
+            context_after = ""
+            if i < len(chunk_texts) - 1 and self.config.chunk_overlap > 0:
+                context_after = self._get_overlap_text(chunk_texts[i + 1], from_end=False)
 
-            # 构建完整 chunk（overlap 作为上下文不放入主内容）
-            enhanced = chunk
-            if overlap_before:
-                enhanced = f"[上文]...{overlap_before}\n---\n{enhanced}"
-            if overlap_after:
-                enhanced = f"{enhanced}\n---\n[下文]...{overlap_after}"
-
-            result.append(enhanced)
+            token_count = self._estimate_token_count(chunk_content)
+            chunk = Chunk(
+                content=chunk_content,
+                context_before=context_before,
+                context_after=context_after,
+                metadata=ChunkMetadata(
+                    chunk_index=i,
+                    total_chunks=len(chunk_texts),
+                    **(metadata or {}),
+                ),
+                token_count=token_count,
+            )
+            result.append(chunk)
 
         return result
 

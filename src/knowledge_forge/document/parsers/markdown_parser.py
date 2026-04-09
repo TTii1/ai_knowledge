@@ -1,15 +1,19 @@
-"""Markdown 文档解析器 - 基于 mistune"""
+"""Markdown 文档解析器 - 基于正则 + 状态机，正确处理代码块"""
 
 import logging
+import re
 from pathlib import Path
 
 from knowledge_forge.document.parsers import BaseParser, ParsedDocument, DocumentSection
 
 logger = logging.getLogger(__name__)
 
+# 标题正则：行首 1-6 个 # 后跟空格
+HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$")
+
 
 class MarkdownParser(BaseParser):
-    """Markdown 文档解析器，保留标题层级"""
+    """Markdown 文档解析器，保留标题层级，正确跳过代码块中的 # """
 
     supported_extensions = [".md", ".markdown"]
 
@@ -27,11 +31,26 @@ class MarkdownParser(BaseParser):
         current_level = 0
         current_content_parts: list[str] = []
 
+        # 状态机：追踪代码块
+        in_code_block = False
+
         for line in lines:
             stripped = line.strip()
 
-            # 检测 Markdown 标题
-            if stripped.startswith("#"):
+            # 追踪代码块状态（``` 开关）
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                current_content_parts.append(line)
+                continue
+
+            # 在代码块内部，不识别标题
+            if in_code_block:
+                current_content_parts.append(line)
+                continue
+
+            # 检测 Markdown 标题（仅非代码块内）
+            heading_match = HEADING_PATTERN.match(stripped)
+            if heading_match:
                 # 保存前一个 section
                 if current_content_parts:
                     sec_content = "\n".join(current_content_parts).strip()
@@ -43,15 +62,11 @@ class MarkdownParser(BaseParser):
                         ))
                         full_content_parts.append(sec_content)
 
-                # 解析标题级别
-                level = 0
-                for char in stripped:
-                    if char == "#":
-                        level += 1
-                    else:
-                        break
-                current_heading = stripped.lstrip("#").strip()
-                current_level = level
+                # 解析标题级别和文本
+                hashes = heading_match.group(1)
+                heading_text = heading_match.group(2).strip()
+                current_level = len(hashes)
+                current_heading = heading_text
                 current_content_parts = [line]
             else:
                 current_content_parts.append(line)

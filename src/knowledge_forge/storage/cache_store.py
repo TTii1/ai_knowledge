@@ -1,6 +1,7 @@
 """Redis 缓存存储（预留）"""
 
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 

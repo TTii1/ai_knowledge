@@ -165,6 +165,43 @@ class VectorStore:
         logger.info("向量搜索完成: top_k=%d, results=%d", top_k, len(output))
         return output
 
+    async def delete_by_document(self, document_id: str, knowledge_base: str = "default") -> int:
+        """删除指定文档的所有 chunks
+
+        Args:
+            document_id: 文档 ID
+            knowledge_base: 知识库名称
+
+        Returns:
+            删除的记录数
+        """
+        if not self._collection:
+            self.connect()
+
+        expr = f'document_id == "{document_id}" && knowledge_base == "{knowledge_base}"'
+        result = self._collection.delete(expr)
+        self._collection.flush()
+        logger.info("删除文档 chunks: document_id=%s, knowledge_base=%s", document_id, knowledge_base)
+        return result.delete_count if hasattr(result, 'delete_count') else 0
+
+    async def delete_by_knowledge_base(self, knowledge_base: str) -> int:
+        """删除指定知识库的所有 chunks
+
+        Args:
+            knowledge_base: 知识库名称
+
+        Returns:
+            删除的记录数
+        """
+        if not self._collection:
+            self.connect()
+
+        expr = f'knowledge_base == "{knowledge_base}"'
+        result = self._collection.delete(expr)
+        self._collection.flush()
+        logger.info("删除知识库 chunks: knowledge_base=%s", knowledge_base)
+        return result.delete_count if hasattr(result, 'delete_count') else 0
+
     def disconnect(self) -> None:
         """断开连接"""
         connections.disconnect("default")

@@ -25,6 +25,7 @@ dependencies = [
     # 关系数据库
     "sqlalchemy>=2.0.0",
     "asyncpg>=0.30.0",
+    "aiosqlite>=0.20.0",
     "alembic>=1.14.0",
 
     # Redis
