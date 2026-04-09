@@ -20,6 +20,7 @@ from knowledge_forge.rag.engine import RAGEngine
 from knowledge_forge.rag.conversation_memory import (
     ConversationMemory, InMemoryMemoryStore, RedisMemoryStore,
 )
+from knowledge_forge.rag.query_cache import QueryCache, LRUCache, RedisCache
 
 
 # ============ 全局服务实例 ============
@@ -37,6 +38,7 @@ _context_builder: ContextBuilder | None = None
 _generator: Generator | None = None
 _rag_engine: RAGEngine | None = None
 _conversation_memory: ConversationMemory | None = None
+_query_cache: QueryCache | None = None
 
 
 def get_app_settings() -> Settings:
@@ -241,12 +243,36 @@ def get_conversation_memory() -> ConversationMemory:
     return _conversation_memory
 
 
+def get_query_cache() -> QueryCache:
+    """获取查询缓存"""
+    global _query_cache
+    if _query_cache is None:
+        # 优先使用 Redis 缓存
+        try:
+            cache_store = get_cache_store()
+            if cache_store._client:
+                redis_cache = RedisCache(redis_client=cache_store._client)
+                _query_cache = QueryCache(store=redis_cache)
+                import logging
+                logging.getLogger(__name__).info("查询缓存: 使用 Redis")
+                return _query_cache
+        except Exception:
+            pass
+
+        # 降级到 LRU 内存缓存
+        lru_cache = LRUCache(max_size=500, default_ttl=1800)
+        _query_cache = QueryCache(store=lru_cache)
+        import logging
+        logging.getLogger(__name__).info("查询缓存: 使用 LRU 内存缓存")
+    return _query_cache
+
+
 def reset_services() -> None:
     """重置所有服务实例（用于测试或应用关闭）"""
     global _vector_store, _metadata_store, _cache_store, _file_store
     global _embedding_service, _pipeline, _query_rewriter, _retriever
     global _reranker, _context_builder, _generator, _rag_engine
-    global _conversation_memory
+    global _conversation_memory, _query_cache
     _vector_store = None
     _metadata_store = None
     _cache_store = None
@@ -260,3 +286,4 @@ def reset_services() -> None:
     _generator = None
     _rag_engine = None
     _conversation_memory = None
+    _query_cache = None
