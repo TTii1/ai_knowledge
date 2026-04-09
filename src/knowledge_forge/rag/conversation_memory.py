@@ -289,3 +289,55 @@ class ConversationMemory:
     async def delete_session(self, session_id: str) -> bool:
         """删除会话"""
         return await self.store.delete_session(session_id)
+
+    async def add_message(self, session_id: str, role: str, content: str, metadata: dict | None = None) -> None:
+        """添加消息（快捷方法）"""
+        msg = ConversationMessage(
+            role=role,
+            content=content,
+            metadata=metadata or {},
+        )
+        await self.store.add_message(session_id, msg)
+
+    async def count_sessions(self) -> int:
+        """统计会话数量"""
+        if isinstance(self.store, InMemoryMemoryStore):
+            return len(self.store._sessions)
+        # Redis 存储的会话统计（扫描 session:* 键）
+        if isinstance(self.store, RedisMemoryStore) and self.store._redis:
+            try:
+                keys = self.store._redis.keys("session:*")
+                # 过滤掉 :messages 后缀的键
+                session_keys = [k for k in keys if not k.decode("utf-8").endswith(":messages")]
+                return len(session_keys)
+            except Exception:
+                return 0
+        return 0
+
+    async def list_sessions(self, page: int = 1, page_size: int = 20) -> dict:
+        """列出会话"""
+        if isinstance(self.store, InMemoryMemoryStore):
+            sessions = list(self.store._sessions.values())
+            sessions.sort(key=lambda s: s.updated_at, reverse=True)
+            total = len(sessions)
+            start = (page - 1) * page_size
+            items = sessions[start:start + page_size]
+
+            return {
+                "items": [
+                    {
+                        "session_id": s.session_id,
+                        "knowledge_base": s.knowledge_base,
+                        "message_count": len(s.messages),
+                        "created_at": s.created_at,
+                        "updated_at": s.updated_at,
+                    }
+                    for s in items
+                ],
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
+
+        # Redis 存储的会话列表（简化实现）
+        return {"items": [], "total": 0, "page": page, "page_size": page_size}

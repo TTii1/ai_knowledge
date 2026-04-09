@@ -7,7 +7,7 @@
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -85,3 +85,72 @@ def compute_hit_rate(
     """计算 Hit Rate"""
     top_k_set = set(retrieved_ids)
     return 1.0 if top_k_set & set(relevant_ids) else 0.0
+
+
+def compute_retrieval_metrics(
+    results: list[dict],
+) -> RetrievalMetrics:
+    """批量计算检索指标
+
+    Args:
+        results: 每个元素包含 retrieved_ids 和 relevant_ids
+
+    Returns:
+        平均检索指标
+    """
+    if not results:
+        return RetrievalMetrics()
+
+    n = len(results)
+    total = RetrievalMetrics()
+
+    for r in results:
+        retrieved = r.get("retrieved_ids", [])
+        relevant = r.get("relevant_ids", [])
+
+        total.recall_at_5 += compute_recall_at_k(retrieved, relevant, 5)
+        total.recall_at_10 += compute_recall_at_k(retrieved, relevant, 10)
+        total.recall_at_20 += compute_recall_at_k(retrieved, relevant, 20)
+        total.precision_at_5 += compute_precision_at_k(retrieved, relevant, 5)
+        total.precision_at_10 += compute_precision_at_k(retrieved, relevant, 10)
+        total.mrr += compute_mrr(retrieved, relevant)
+        total.hit_rate += compute_hit_rate(retrieved, relevant)
+
+    return RetrievalMetrics(
+        recall_at_5=total.recall_at_5 / n,
+        recall_at_10=total.recall_at_10 / n,
+        recall_at_20=total.recall_at_20 / n,
+        precision_at_5=total.precision_at_5 / n,
+        precision_at_10=total.precision_at_10 / n,
+        mrr=total.mrr / n,
+        hit_rate=total.hit_rate / n,
+    )
+
+
+def compute_performance_metrics(
+    results: list[dict],
+) -> PerformanceMetrics:
+    """批量计算性能指标
+
+    Args:
+        results: 每个元素包含 e2e_latency_ms, retrieval_latency_ms, generation_latency_ms
+
+    Returns:
+        平均性能指标
+    """
+    if not results:
+        return PerformanceMetrics()
+
+    n = len(results)
+    total = PerformanceMetrics()
+
+    for r in results:
+        total.e2e_latency_ms += r.get("e2e_latency_ms", 0)
+        total.retrieval_latency_ms += r.get("retrieval_latency_ms", 0)
+        total.generation_latency_ms += r.get("generation_latency_ms", 0)
+
+    return PerformanceMetrics(
+        e2e_latency_ms=total.e2e_latency_ms / n,
+        retrieval_latency_ms=total.retrieval_latency_ms / n,
+        generation_latency_ms=total.generation_latency_ms / n,
+    )
